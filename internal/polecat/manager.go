@@ -1559,16 +1559,19 @@ func (m *Manager) ReuseIdlePolecat(name string, opts AddOptions) (*Polecat, erro
 		return nil, fmt.Errorf("start point %s not found — fall back to full repair", startPoint)
 	}
 
-	// Clean worktree state before branch switch — the worktree may have stale
-	// state from a previous dog/pool dispatch (uncommitted changes, detached HEAD,
-	// or checked out on an old dog/alpha-* branch).
-	_ = polecatGit.ResetHard("HEAD")
+	// GH#2536: Clean worktree state before branch switch — the worktree may have
+	// stale state from a previous dog/pool dispatch (uncommitted changes, untracked
+	// files, detached HEAD, or checked out on an old dog/alpha-* branch).
+	// Reset to the start point directly (not HEAD) to avoid "local changes would
+	// be overwritten" errors when the start point has different file content.
+	_ = polecatGit.ResetHard(startPoint)
+	_ = polecatGit.CleanForce()
 
 	// Create fresh branch from start point (branch-only, no worktree add/remove)
 	branchName := m.buildBranchName(name, opts.HookBead)
 	if err := polecatGit.CheckoutNewBranch(branchName, startPoint); err != nil {
-		// checkout -b fails if we're in detached HEAD or branch already exists.
-		// Fall back to: create branch separately, then checkout.
+		// checkout -b fails if branch already exists or other edge case.
+		// Fall back to: checkout start point, then create branch.
 		_ = polecatGit.Checkout(startPoint)
 		if err2 := polecatGit.CheckoutNewBranch(branchName, startPoint); err2 != nil {
 			return nil, fmt.Errorf("creating branch %s from %s (retry after cleanup): %w", branchName, startPoint, err2)
