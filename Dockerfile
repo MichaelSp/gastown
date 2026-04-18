@@ -32,7 +32,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Install Go from official tarball (apt golang-go is too old)
 RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz
-ENV PATH="/app/gastown:/usr/local/go/bin:/home/agent/go/bin:${PATH}"
+ENV PATH="/app/gastown:/usr/local/go/bin:/home/agent/go/bin:/home/agent/.local/bin:${PATH}"
 
 # Install beads (bd) and dolt
 RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
