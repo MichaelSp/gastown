@@ -238,6 +238,13 @@ func runMayorAttach(cmd *cobra.Command, args []string) error {
 
 			paneID, err := t.GetPaneID(sessionID)
 			if err != nil {
+				if isSessionGone(err) {
+					fmt.Println("Session gone, doing full restart...")
+					if startErr := mgr.Start(mayorAgentOverride); startErr != nil && startErr != mayor.ErrAlreadyRunning {
+						return fmt.Errorf("restarting runtime: %w", startErr)
+					}
+					return attachToTmuxSession(sessionID)
+				}
 				return fmt.Errorf("getting pane ID: %w", err)
 			}
 
@@ -281,7 +288,17 @@ func runMayorAttach(cmd *cobra.Command, args []string) error {
 
 			// Note: respawn-pane automatically resets remain-on-exit to off
 			if err := t.RespawnPane(paneID, startupCmd); err != nil {
-				return fmt.Errorf("restarting runtime: %w", err)
+				// Race: daemon may have killed the session (WaitFatal) between
+				// our IsRunning check and now, taking the tmux server with it
+				// (last session gone → server exits). Fall back to full start.
+				if isSessionGone(err) {
+					fmt.Println("Session gone during respawn, doing full restart...")
+					if startErr := mgr.Start(mayorAgentOverride); startErr != nil && startErr != mayor.ErrAlreadyRunning {
+						return fmt.Errorf("restarting runtime: %w", startErr)
+					}
+				} else {
+					return fmt.Errorf("restarting runtime: %w", err)
+				}
 			}
 
 			fmt.Printf("%s Mayor restarted with context\n", style.Bold.Render("✓"))
@@ -484,4 +501,10 @@ func runMayorAcp(cmd *cobra.Command, args []string) error {
 
 	mgr := mayor.NewManager(townRoot)
 	return mgr.StartACP(ctx, mayorAgentOverride, rigName)
+}
+
+// isSessionGone returns true when a tmux error indicates the server or session
+// no longer exists — used to trigger a full restart fallback.
+func isSessionGone(err error) bool {
+	return err == tmux.ErrNoServer || err == tmux.ErrSessionNotFound
 }
