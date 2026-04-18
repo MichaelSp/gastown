@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -130,6 +131,7 @@ infrastructure agents are running:
   • Daemon     - Go background process that pokes agents
   • Deacon     - Health orchestrator (monitors Mayor/Witnesses)
   • Mayor      - Global work coordinator
+	• Dashboard  - Web dashboard UI
   • Witnesses  - Per-rig polecat managers
   • Refineries - Per-rig merge queue processors
 
@@ -416,9 +418,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// 8. Dashboard
+	dashboardDetail, err := ensureDashboard(townRoot)
+	if err != nil {
+		services = append(services, ServiceStatus{Name: "Dashboard", Type: "dashboard", OK: false, Detail: err.Error()})
+		allOK = false
+	} else {
+		services = append(services, ServiceStatus{Name: "Dashboard", Type: "dashboard", OK: true, Detail: dashboardDetail})
+	}
+
 	// Log boot event for both JSON and text paths
 	if allOK {
-		startedServices := []string{"dolt", "daemon", "deacon", "mayor"}
+		startedServices := []string{"dolt", "daemon", "deacon", "mayor", "dashboard"}
 		for _, rigName := range rigs {
 			startedServices = append(startedServices, fmt.Sprintf("%s/witness", rigName))
 			startedServices = append(startedServices, fmt.Sprintf("%s/refinery", rigName))
@@ -456,6 +467,79 @@ func printStatus(name string, ok bool, detail string) {
 	} else {
 		fmt.Printf("%s %s: %s\n", style.ErrorPrefix, name, detail)
 	}
+}
+
+// ensureDashboard starts the dashboard server if not already reachable.
+// Returns a user-friendly detail string for status output.
+func ensureDashboard(townRoot string) (string, error) {
+	port := 8080
+	if portStr := strings.TrimSpace(os.Getenv("DASHBOARD_PORT")); portStr != "" {
+		p, err := strconv.Atoi(portStr)
+		if err != nil || p < 1 || p > 65535 {
+			return "", fmt.Errorf("invalid DASHBOARD_PORT %q", portStr)
+		}
+		port = p
+	}
+
+	bind := strings.TrimSpace(os.Getenv("DASHBOARD_BIND"))
+	if bind == "" {
+		if os.Getenv("IS_SANDBOX") != "" {
+			bind = "0.0.0.0"
+		} else {
+			bind = "127.0.0.1"
+		}
+	}
+
+	checkHost := bind
+	if bind == "0.0.0.0" || bind == "::" || bind == "[::]" {
+		checkHost = "127.0.0.1"
+	}
+
+	if isTCPReachable(checkHost, port) {
+		return fmt.Sprintf("already running on http://%s:%d", checkHost, port), nil
+	}
+
+	gtPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolving gt executable: %w", err)
+	}
+
+	cmd := exec.Command(gtPath, "dashboard", "--bind", bind, "--port", strconv.Itoa(port))
+	cmd.Dir = townRoot
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	util.SetDetachedProcessGroup(cmd)
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("starting dashboard: %w", err)
+	}
+
+	if !waitForTCP(checkHost, port, 5*time.Second) {
+		return "", fmt.Errorf("dashboard failed to start on %s:%d", bind, port)
+	}
+
+	return fmt.Sprintf("started on http://%s:%d", checkHost, port), nil
+}
+
+func isTCPReachable(host string, port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func waitForTCP(host string, port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if isTCPReachable(host, port) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
 }
 
 // disableCurrentAgentDND resets DND for the current role context (if muted).

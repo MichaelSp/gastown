@@ -1,22 +1,13 @@
 #!/bin/sh
 set -e
 
-# Re-apply git/dolt config on every start so env var changes take effect
-# even when the home volume already exists from a previous run.
-if [ -n "$GIT_USER" ] && [ -n "$GIT_EMAIL" ]; then
-    git config --global user.name "$GIT_USER"
-    git config --global user.email "$GIT_EMAIL"
-    git config --global credential.helper store
-    dolt config --global --add user.name "$GIT_USER"
-    dolt config --global --add user.email "$GIT_EMAIL"
+# Trust the hall-pass MITM CA if the shared volume has been populated.
+# The entrypoint runs as root so we can write to the CA dir and run
+# update-ca-certificates directly (no_new_privileges blocks sudo/setuid).
+if [ -f /ca/ca.crt ]; then
+    cp /ca/ca.crt /usr/local/share/ca-certificates/hall-pass.crt
+    update-ca-certificates --fresh > /dev/null
 fi
 
-if [ ! -f /gt/mayor/town.json ]; then
-    echo "Initializing Gas Town workspace at /gt..."
-    /app/gastown/gt install /gt --git
-else
-    echo "Refreshing Gas Town workspace at /gt..."
-    /app/gastown/gt install /gt --git --force
-fi
-
-exec "$@"
+# Drop privileges to agent for all subsequent work.
+exec gosu agent /app/docker-entrypoint-agent.sh "$@"

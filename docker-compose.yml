@@ -7,8 +7,12 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: gastown-sandbox
+    working_dir: /gt
     stdin_open: false
     tty: false
+    depends_on:
+      hall-pass:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -24,21 +28,45 @@ services:
       IS_SANDBOX: 1
       GIT_USER: ${GIT_USER:-TestUser}
       GIT_EMAIL: ${GIT_EMAIL:-test@example.com}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN}
+      HTTP_PROXY: ${HTTP_PROXY:-http://hall-pass:8888}
+      HTTPS_PROXY: ${HTTPS_PROXY:-http://hall-pass:8888}
     volumes:
       # FOLDER must be defined in .env file, e.g. FOLDER=/home/user
       # or provided as an environment variable when running docker compose,
       # e.g. FOLDER=/home/user docker compose up
-      - agent-home:/home/agent
+      - ${FOLDER}/.agent-home:/home/agent
       - ${FOLDER}:/gt
       # Dolt data on a proper ext4 volume (not the macOS bind mount) to
       # avoid journal corruption from VirtioFS fsync semantics.
       - dolt-data:/gt/.dolt-data
+      # hall-pass CA cert for trusting MITM HTTPS connections
+      - hallpass-ca:/ca:ro
     ports:
       - "${DASHBOARD_PORT:-8080}:8080"
     command: sleep infinity
 
     # Exec into the container with: docker compose exec gastown zsh
 
+  hall-pass:
+    build:
+      context: ./projects/hall-pass
+      dockerfile: Dockerfile
+    container_name: hall-pass
+    restart: unless-stopped
+    volumes:
+      - hallpass-data:/data
+      - hallpass-ca:/ca
+    ports:
+      - "${HALLPASS_PROXY_PORT:-8888}:8888"
+      - "${HALLPASS_DASH_PORT:-9090}:9090"
+    # To use hall-pass as a proxy from the gastown container, set:
+    #   HTTP_PROXY=http://hall-pass:8888
+    #   HTTPS_PROXY=http://hall-pass:8888
+    # and trust the CA cert at /ca/ca.crt (hallpass-ca volume).
+
 volumes:
-  agent-home:
   dolt-data:
+  hallpass-data:
+  hallpass-ca:

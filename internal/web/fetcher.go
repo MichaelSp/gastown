@@ -45,6 +45,35 @@ func runCmd(timeout time.Duration, name string, args ...string) (*bytes.Buffer, 
 	return &stdout, nil
 }
 
+// runTmuxCmd executes a tmux command with the Gas Town socket applied.
+// This ensures dashboard reads the same tmux server as other gt commands.
+func runTmuxCmd(timeout time.Duration, args ...string) (*bytes.Buffer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	allArgs := []string{"-u"}
+	socket := tmux.GetDefaultSocket()
+	if socket == "" {
+		socket = os.Getenv("GT_TOWN_SOCKET")
+	}
+	if socket != "" {
+		allArgs = append(allArgs, "-L", socket)
+	}
+	allArgs = append(allArgs, args...)
+
+	cmd := exec.CommandContext(ctx, "tmux", allArgs...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("tmux timed out after %v", timeout)
+		}
+		return nil, err
+	}
+	return &stdout, nil
+}
+
 var fetcherRunCmd = runCmd
 var fetcherGetSessionEnv = func(sessionName, key string) (string, error) {
 	return tmux.NewTmux().GetEnvironment(sessionName, key)
@@ -509,7 +538,7 @@ func (f *LiveConvoyFetcher) getSessionActivityForAssignee(assignee string) *time
 
 	// Query tmux for session activity
 	// Format: session_activity returns unix timestamp
-	stdout, err := runCmd(f.tmuxCmdTimeout, "tmux", "list-sessions", "-F", "#{session_name}|#{session_activity}",
+	stdout, err := runTmuxCmd(f.tmuxCmdTimeout, "list-sessions", "-F", "#{session_name}|#{session_activity}",
 		"-f", fmt.Sprintf("#{==:#{session_name},%s}", sessionName))
 	if err != nil {
 		return nil
@@ -541,7 +570,7 @@ func (f *LiveConvoyFetcher) getSessionActivityForAssignee(assignee string) *time
 func (f *LiveConvoyFetcher) getAllPolecatActivity() *time.Time {
 	// List all tmux sessions matching gt-*-* pattern (polecat sessions)
 	// Format: gt-{rig}-{polecat}
-	stdout, err := runCmd(f.tmuxCmdTimeout, "tmux", "list-sessions", "-F", "#{session_name}|#{session_activity}")
+	stdout, err := runTmuxCmd(f.tmuxCmdTimeout, "list-sessions", "-F", "#{session_name}|#{session_activity}")
 	if err != nil {
 		return nil
 	}
@@ -801,7 +830,7 @@ func (f *LiveConvoyFetcher) FetchWorkers() ([]WorkerRow, error) {
 	assignedIssues := f.getAssignedIssuesMap()
 
 	// Query all tmux sessions with window_activity for more accurate timing
-	stdout, err := runCmd(f.tmuxCmdTimeout, "tmux", "list-sessions", "-F", "#{session_name}|#{window_activity}")
+	stdout, err := runTmuxCmd(f.tmuxCmdTimeout, "list-sessions", "-F", "#{session_name}|#{window_activity}")
 	if err != nil {
 		// tmux not running or no sessions
 		return nil, nil
@@ -964,7 +993,7 @@ func calculateWorkerWorkStatus(activityAge time.Duration, issueID, workerName st
 
 // getWorkerStatusHint captures the last non-empty line from a worker's pane.
 func (f *LiveConvoyFetcher) getWorkerStatusHint(sessionName string) string {
-	stdout, err := runCmd(f.tmuxCmdTimeout, "tmux", "capture-pane", "-t", sessionName, "-p", "-J")
+	stdout, err := runTmuxCmd(f.tmuxCmdTimeout, "capture-pane", "-t", sessionName, "-p", "-J")
 	if err != nil {
 		return ""
 	}
@@ -1424,7 +1453,7 @@ func (f *LiveConvoyFetcher) FetchQueues() ([]QueueRow, error) {
 // FetchSessions returns active tmux sessions with role detection.
 func (f *LiveConvoyFetcher) FetchSessions() ([]SessionRow, error) {
 	// List tmux sessions
-	stdout, err := fetcherRunCmd(f.tmuxCmdTimeout, "tmux", "list-sessions", "-F", "#{session_name}:#{session_activity}")
+	stdout, err := runTmuxCmd(f.tmuxCmdTimeout, "list-sessions", "-F", "#{session_name}:#{session_activity}")
 	if err != nil {
 		return nil, nil // tmux not running or no sessions
 	}
@@ -1542,7 +1571,7 @@ func (f *LiveConvoyFetcher) FetchMayor() (*MayorStatus, error) {
 	mayorSessionName := session.MayorSessionName()
 
 	// Check if mayor tmux session exists
-	stdout, err := fetcherRunCmd(f.tmuxCmdTimeout, "tmux", "list-sessions", "-F", "#{session_name}:#{session_activity}")
+	stdout, err := runTmuxCmd(f.tmuxCmdTimeout, "list-sessions", "-F", "#{session_name}:#{session_activity}")
 	if err != nil {
 		// tmux not running or no sessions
 		return status, nil

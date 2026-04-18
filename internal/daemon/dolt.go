@@ -133,6 +133,9 @@ type DoltServerManager struct {
 	// Identity verification state
 	lastIdentityCheck time.Time // Last time we ran the database identity check
 
+	// Write probe state
+	lastWriteProbe time.Time // Last time we ran the write-capability probe
+
 	// Health check warnings (Option B throttling for doctor molecule).
 	// Populated by checkHealthLocked(), consumed by Daemon.ensureDoltServerRunning().
 	lastWarnings []string // Warnings from the most recent health check
@@ -434,22 +437,26 @@ func (m *DoltServerManager) EnsureRunning() error {
 			m.stopLocked()
 			return m.restartWithBackoff()
 		}
-		// Check write capability (read-only detection).
-		// The health check above only verifies read connectivity.
-		// Under concurrent write load, Dolt can enter a persistent read-only
-		// state that requires a server restart to clear.
-		if err := m.checkWriteHealthLocked(); err != nil {
-			m.logger("Dolt server read-only: %v, restarting...", err)
-			m.sendReadOnlyAlert(err)
-			m.writeUnhealthySignal("read_only", err.Error())
-			m.captureGoroutineDump()
-			m.stopLocked()
-			return m.restartWithBackoff()
+		// Check write capability (read-only detection), throttled to once per 5 minutes.
+		// Running CREATE/REPLACE/DROP on every 30s health tick triggers Dolt's
+		// auto_gc (archive_level=1 compression) after each DDL op, causing high
+		// sustained CPU. Read-only mode is rare; 5-minute detection lag is acceptable.
+		const writeProbeInterval = 5 * time.Minute
+		now := m.now()
+		if now.Sub(m.lastWriteProbe) >= writeProbeInterval {
+			m.lastWriteProbe = now
+			if err := m.checkWriteHealthLocked(); err != nil {
+				m.logger("Dolt server read-only: %v, restarting...", err)
+				m.sendReadOnlyAlert(err)
+				m.writeUnhealthySignal("read_only", err.Error())
+				m.captureGoroutineDump()
+				m.stopLocked()
+				return m.restartWithBackoff()
+			}
 		}
 		// Periodic identity check: verify the server is serving the correct databases.
 		// Runs every 5 minutes (not every health tick) since imposters are rare.
 		const identityCheckInterval = 5 * time.Minute
-		now := m.now()
 		if now.Sub(m.lastIdentityCheck) >= identityCheckInterval {
 			m.lastIdentityCheck = now
 			if err := m.checkDatabaseIdentityLocked(); err != nil {
