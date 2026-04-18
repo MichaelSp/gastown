@@ -61,9 +61,16 @@ USER agent
 COPY --chown=agent:agent go.mod go.sum /app/gastown/
 RUN cd /app/gastown && go mod download
 
-COPY --chown=agent:agent . /app/gastown
+# Copy only Go source so non-Go file changes don't bust the build cache
+COPY --chown=agent:agent Makefile /app/gastown/
+COPY --chown=agent:agent cmd/ /app/gastown/cmd/
+COPY --chown=agent:agent internal/ /app/gastown/internal/
 
 RUN cd /app/gastown && make build
+
+# Copy remaining files (entrypoints, configs, templates) — after build so
+# changes here don't invalidate the expensive compile step above
+COPY --chown=agent:agent . /app/gastown
 
 # Entrypoints: root script handles CA cert install then drops to agent
 USER root
