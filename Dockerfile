@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libzstd-dev \
+    libicu-dev \
     git \
     sqlite3 \
     tmux \
@@ -37,10 +38,11 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV PATH="/app/gastown:/usr/local/go/bin:/home/agent/go/bin:/home/agent/.local/bin:${PATH}"
 
 # Install beads (bd) with CGO enabled for embedded Dolt support.
-# The curl|bash installer downloads a pre-built binary without CGO;
-# go install with CGO_ENABLED=1 builds an embedded-capable binary.
-RUN CGO_ENABLED=1 go install github.com/gastownhall/beads/cmd/bd@latest && \
-    mv /root/go/bin/bd /usr/local/bin/bd
+# go install rejects modules with replace directives, so we clone and build.
+RUN git clone --depth=1 https://github.com/gastownhall/beads.git /tmp/beads && \
+    cd /tmp/beads && \
+    CGO_ENABLED=1 go build -o /usr/local/bin/bd ./cmd/bd && \
+    rm -rf /tmp/beads
 # Install dolt (needed for identity setup and migrations even in embedded mode)
 RUN curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
 
