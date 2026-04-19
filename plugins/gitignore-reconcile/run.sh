@@ -17,7 +17,7 @@ if [ -z "$RIG_JSON" ]; then
   exit 0
 fi
 
-RIG_PATHS=$(echo "$RIG_JSON" | jq -r '.[] | select(.repo_path != null and .repo_path != "") | .repo_path // empty' 2>/dev/null || true)
+RIG_PATHS=$(echo "$RIG_JSON" | jq -r '.[] | (.path // .repo_path // "") | select(. != "")' 2>/dev/null || true)
 if [ -z "$RIG_PATHS" ]; then
   log "SKIP: no rigs with repo paths"
   exit 0

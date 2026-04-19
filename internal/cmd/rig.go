@@ -755,6 +755,7 @@ func runRigList(cmd *cobra.Command, args []string) error {
 	type rigInfo struct {
 		Name        string `json:"name"`
 		BeadsPrefix string `json:"beads_prefix"`
+		Path        string `json:"path"`
 		Status      string `json:"status"`
 		Witness     string `json:"witness"`
 		Refinery    string `json:"refinery"`
@@ -795,6 +796,7 @@ func runRigList(cmd *cobra.Command, args []string) error {
 		rigs = append(rigs, rigInfo{
 			Name:        name,
 			BeadsPrefix: prefix,
+			Path:        r.Path,
 			Status:      strings.ToLower(opState),
 			Witness:     witnessStatus,
 			Refinery:    refineryStatus,

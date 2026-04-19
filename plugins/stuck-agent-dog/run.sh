@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-TOWN_ROOT="${GT_TOWN_ROOT:-$(gt town root 2>/dev/null)}"
+TOWN_ROOT="${GT_TOWN_ROOT:-${GT_ROOT:-$(gt town root 2>/dev/null || true)}}"
 RIGS_JSON_PATH="${TOWN_ROOT}/mayor/rigs.json"
 
 log() { echo "[stuck-agent-dog] $*"; }

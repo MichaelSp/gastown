@@ -23,7 +23,7 @@ RIG_PATHS=$(echo "$RIG_JSON" | python3 -c "
 import json, sys
 rigs = json.load(sys.stdin)
 for r in rigs:
-    p = r.get('repo_path') or ''
+    p = r.get('path') or r.get('repo_path') or ''
     if p: print(p)
 " 2>/dev/null)
 
