@@ -11,6 +11,19 @@ if [ -n "$GIT_USER" ] && [ -n "$GIT_EMAIL" ]; then
     dolt config --global --add user.email "$GIT_EMAIL"
 fi
 
+# In sandbox mode, bd uses embedded Dolt. Strip server-mode fields from any
+# existing metadata.json so bd doesn't try to connect to a nonexistent server.
+if [ -n "$IS_SANDBOX" ] && [ -f /gt/.beads/metadata.json ]; then
+    project_id=$(grep -o '"project_id"[[:space:]]*:[[:space:]]*"[^"]*"' /gt/.beads/metadata.json | head -1)
+    cat > /gt/.beads/metadata.json <<JSON
+{
+  "backend": "dolt",
+  "database": "hq",
+  ${project_id}
+}
+JSON
+fi
+
 if [ ! -f /gt/mayor/town.json ]; then
     echo "Initializing Gas Town workspace at /gt..."
     /app/gastown/gt install /gt --git

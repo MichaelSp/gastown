@@ -290,8 +290,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	startupWg.Wait()
 
-	// Ensure beads metadata points to the Dolt server
-	if !doltSkipped && doltOK {
+	// Ensure beads metadata points to the Dolt server.
+	// Skipped in sandbox mode — embedded Dolt manages its own metadata.json.
+	if !doltSkipped && doltOK && os.Getenv("IS_SANDBOX") == "" {
 		_, _ = doltserver.EnsureAllMetadata(townRoot)
 	}
 

@@ -246,7 +246,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Ensure beads metadata is correct BEFORE agents start.
 	// This prevents bd from seeing stale config and spawning orphan servers.
-	if doltOK {
+	// Skipped in sandbox mode — embedded Dolt manages its own metadata.json.
+	if doltOK && os.Getenv("IS_SANDBOX") == "" {
 		_, _ = doltserver.EnsureAllMetadata(townRoot)
 	}
 
