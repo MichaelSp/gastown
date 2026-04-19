@@ -9,6 +9,8 @@ USER root
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    pkg-config \
+    libzstd-dev \
     git \
     sqlite3 \
     tmux \
@@ -34,14 +36,29 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz
 ENV PATH="/app/gastown:/usr/local/go/bin:/home/agent/go/bin:/home/agent/.local/bin:${PATH}"
 
-# Install beads (bd) and dolt
-RUN curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+# Install beads (bd) with CGO enabled for embedded Dolt support.
+# The curl|bash installer downloads a pre-built binary without CGO;
+# go install with CGO_ENABLED=1 builds an embedded-capable binary.
+RUN CGO_ENABLED=1 go install github.com/gastownhall/beads/cmd/bd@latest && \
+    mv /root/go/bin/bd /usr/local/bin/bd
+# Install dolt (needed for identity setup and migrations even in embedded mode)
 RUN curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash
 
 # Install fnm and bun to /usr/local so all users get them
 RUN curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir /usr/local/bin --skip-shell
 RUN curl -fsSL https://bun.sh/install | bash && \
     mv /root/.bun/bin/bun /usr/local/bin/bun
+
+# Relocate Claude CLI out of /home/agent so the bind-mount doesn't shadow it
+RUN cp "$(readlink -f /home/agent/.local/bin/claude)" /usr/local/bin/claude
+
+# Install kubectl and helm for k3s cluster access
+RUN ARCH=$(dpkg --print-architecture) && \
+    K8S_VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt) && \
+    curl -fsSL "https://dl.k8s.io/release/${K8S_VER}/bin/linux/${ARCH}/kubectl" \
+        -o /usr/local/bin/kubectl && \
+    chmod +x /usr/local/bin/kubectl
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # Set up directories
 RUN mkdir -p /app /gt /gt/.dolt-data && chown -R agent:agent /app /gt

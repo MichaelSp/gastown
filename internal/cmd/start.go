@@ -221,9 +221,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Agents run bd commands on startup (via gt prime → patrol_helpers) that
 	// connect to the Dolt SQL server. Without this sequencing, they race the
 	// server and bd auto-spawns orphan embedded servers. (gt-t2zf)
+	// In sandbox mode bd uses embedded Dolt — no external server to start.
 	var doltOK bool
 	cfg := doltserver.DefaultConfig(townRoot)
-	if _, err := os.Stat(cfg.DataDir); os.IsNotExist(err) {
+	if os.Getenv("IS_SANDBOX") != "" {
+		// Embedded Dolt mode: bd handles its own in-process engine.
+		doltOK = true
+		fmt.Printf("  %s Dolt server skipped (sandbox: embedded mode)\n", style.Dim.Render("○"))
+	} else if _, err := os.Stat(cfg.DataDir); os.IsNotExist(err) {
 		// No Dolt data dir — nothing to start
 		fmt.Printf("  %s Dolt server skipped (no data dir)\n", style.Dim.Render("○"))
 	} else {

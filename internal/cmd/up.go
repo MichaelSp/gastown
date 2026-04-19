@@ -213,6 +213,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 	// 0. Dolt server (if configured)
 	go func() {
 		defer startupWg.Done()
+		// In sandbox (Docker) mode, bd uses embedded Dolt — no external server needed.
+		if os.Getenv("IS_SANDBOX") != "" {
+			doltSkipped = true
+			return
+		}
 		cfg := doltserver.DefaultConfig(townRoot)
 		if _, err := os.Stat(cfg.DataDir); os.IsNotExist(err) {
 			doltSkipped = true

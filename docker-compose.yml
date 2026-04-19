@@ -13,6 +13,8 @@ services:
     depends_on:
       hall-pass:
         condition: service_healthy
+      k8s:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -32,6 +34,9 @@ services:
       ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN}
       HTTP_PROXY: ${HTTP_PROXY:-http://hall-pass:8888}
       HTTPS_PROXY: ${HTTPS_PROXY:-http://hall-pass:8888}
+      # Bypass proxy for k8s API server and cluster-internal CIDRs
+      NO_PROXY: ${NO_PROXY:-k8s,localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      KUBECONFIG: /run/kubeconfig.yaml
     volumes:
       # FOLDER must be defined in .env file, e.g. FOLDER=/home/user
       # or provided as an environment variable when running docker compose,
@@ -41,8 +46,12 @@ services:
       # Dolt data on a proper ext4 volume (not the macOS bind mount) to
       # avoid journal corruption from VirtioFS fsync semantics.
       - dolt-data:/gt/.dolt-data
+      # Embedded Dolt data on ext4 volume to avoid VirtioFS fsync corruption.
+      - dolt-embed-data:/gt/.beads/embeddeddolt
       # hall-pass CA cert for trusting MITM HTTPS connections
       - hallpass-ca:/ca:ro
+      # k8s kubeconfig — patched to use service hostname k8s:6443
+      - k8s-kubeconfig:/k8s-kubeconfig:ro
     ports:
       - "${DASHBOARD_PORT:-8080}:8080"
     command: sleep infinity
@@ -66,7 +75,48 @@ services:
     #   HTTPS_PROXY=http://hall-pass:8888
     # and trust the CA cert at /ca/ca.crt (hallpass-ca volume).
 
+  k8s:
+    image: rancher/k3s:v1.32.3-k3s1
+    container_name: k8s
+    hostname: k8s
+    privileged: true
+    depends_on:
+      hall-pass:
+        condition: service_healthy
+    environment:
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "644"
+      # Route image pulls through hall-pass; bypass proxy for cluster-internal traffic
+      HTTP_PROXY: http://hall-pass:8888
+      HTTPS_PROXY: http://hall-pass:8888
+      NO_PROXY: "localhost,127.0.0.1,10.42.0.0/16,10.43.0.0/16,172.16.0.0/12,192.168.0.0/16"
+    # Install hall-pass CA before k3s starts so containerd trusts the MITM proxy.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -f /ca/ca.crt ]; then
+          cat /ca/ca.crt >> /etc/ssl/certs/ca-certificates.crt
+        fi
+        exec k3s server --tls-san k8s --snapshotter native \
+          --disable traefik --disable metrics-server --disable servicelb --disable local-storage
+    volumes:
+      - k8s-data:/var/lib/rancher/k3s
+      - k8s-kubeconfig:/output
+      - hallpass-ca:/ca:ro
+    tmpfs:
+      - /run
+      - /var/run
+    healthcheck:
+      test: ["CMD-SHELL", "kubectl get nodes --no-headers 2>/dev/null | grep -q ' Ready '"]
+      interval: 30s
+      timeout: 15s
+      retries: 20
+      start_period: 60s
+
 volumes:
   dolt-data:
+  dolt-embed-data:
   hallpass-data:
   hallpass-ca:
+  k8s-data:
+  k8s-kubeconfig:

@@ -156,48 +156,51 @@ func runInstall(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("dolt identity setup failed (required for beads): %w\n\nTo fix, run:\n  dolt config --global --add user.name \"Your Name\"\n  dolt config --global --add user.email \"you@example.com\"", err)
 			}
 
-			// Preflight: check Dolt port availability before creating any files.
-			// A port conflict would leave a partial install that needs --force to retry.
-			port := doltserver.DefaultPort
-			if installDoltPort != 0 {
-				port = installDoltPort
-				os.Setenv("GT_DOLT_PORT", strconv.Itoa(port))
-			} else if p := os.Getenv("GT_DOLT_PORT"); p != "" {
-				if envPort, err := strconv.Atoi(p); err == nil {
-					port = envPort
-				}
-			}
-			if err := doltserver.CheckPortAvailable(port); err != nil {
-				// Port is in use — but if a Dolt server is already running
-				// on it, we can reuse it instead of starting a new one.
-				dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%d)/", port)
-				if db, connErr := sql.Open("mysql", dsn); connErr == nil {
-					if pingErr := db.Ping(); pingErr == nil {
-						db.Close()
-						// Usable Dolt server on this port — skip the check.
-						fmt.Printf("   %s Using existing Dolt server on port %d\n",
-							style.Dim.Render("ℹ"), port)
-						goto portOK
+			// In sandbox mode bd uses embedded Dolt — skip port conflict checks.
+			if os.Getenv("IS_SANDBOX") == "" {
+				// Preflight: check Dolt port availability before creating any files.
+				// A port conflict would leave a partial install that needs --force to retry.
+				port := doltserver.DefaultPort
+				if installDoltPort != 0 {
+					port = installDoltPort
+					os.Setenv("GT_DOLT_PORT", strconv.Itoa(port))
+				} else if p := os.Getenv("GT_DOLT_PORT"); p != "" {
+					if envPort, err := strconv.Atoi(p); err == nil {
+						port = envPort
 					}
-					db.Close()
 				}
-				pid, dataDir := doltserver.PortHolder(port)
-				msg := fmt.Sprintf("Dolt port %d is already in use", port)
-				if pid > 0 && dataDir != "" {
-					msg += fmt.Sprintf("\nPort is held by dolt PID %d serving %s", pid, dataDir)
-				} else if pid > 0 {
-					msg += fmt.Sprintf("\nPort is held by PID %d", pid)
+				if err := doltserver.CheckPortAvailable(port); err != nil {
+					// Port is in use — but if a Dolt server is already running
+					// on it, we can reuse it instead of starting a new one.
+					dsn := fmt.Sprintf("root:@tcp(127.0.0.1:%d)/", port)
+					if db, connErr := sql.Open("mysql", dsn); connErr == nil {
+						if pingErr := db.Ping(); pingErr == nil {
+							db.Close()
+							// Usable Dolt server on this port — skip the check.
+							fmt.Printf("   %s Using existing Dolt server on port %d\n",
+								style.Dim.Render("ℹ"), port)
+							goto portOK
+						}
+						db.Close()
+					}
+					pid, dataDir := doltserver.PortHolder(port)
+					msg := fmt.Sprintf("Dolt port %d is already in use", port)
+					if pid > 0 && dataDir != "" {
+						msg += fmt.Sprintf("\nPort is held by dolt PID %d serving %s", pid, dataDir)
+					} else if pid > 0 {
+						msg += fmt.Sprintf("\nPort is held by PID %d", pid)
+					}
+					msg += "\n\nAnother Gas Town instance is using this port. Specify a free port:"
+					origArgs := strings.Join(os.Args[1:], " ")
+					if freePort := doltserver.FindFreePort(port + 1); freePort > 0 {
+						msg += fmt.Sprintf("\n\n  gt %s --dolt-port %d", origArgs, freePort)
+					} else {
+						msg += fmt.Sprintf("\n\n  gt %s --dolt-port <port>", origArgs)
+					}
+					return fmt.Errorf("%s", msg)
 				}
-				msg += "\n\nAnother Gas Town instance is using this port. Specify a free port:"
-				origArgs := strings.Join(os.Args[1:], " ")
-				if freePort := doltserver.FindFreePort(port + 1); freePort > 0 {
-					msg += fmt.Sprintf("\n\n  gt %s --dolt-port %d", origArgs, freePort)
-				} else {
-					msg += fmt.Sprintf("\n\n  gt %s --dolt-port <port>", origArgs)
-				}
-				return fmt.Errorf("%s", msg)
+			portOK:
 			}
-		portOK:
 		}
 	}
 
@@ -355,9 +358,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	// Rig beads are separate and have their own prefixes.
 	if !installNoBeads {
 		// Set up Dolt: identity → init-rig hq → server start.
-		// This ordering works because InitRig falls through to `dolt init`
-		// when the server isn't running yet.
-		if _, err := exec.LookPath("dolt"); err == nil {
+		// In sandbox mode, bd uses embedded Dolt — skip server-mode setup.
+		if _, err := exec.LookPath("dolt"); err == nil && os.Getenv("IS_SANDBOX") == "" {
 			// Identity was verified in preflight above.
 			// Create HQ database before starting server.
 			if _, _, err := doltserver.InitRig(absPath, "hq"); err != nil {
@@ -365,14 +367,12 @@ func runInstall(cmd *cobra.Command, args []string) error {
 			}
 
 			// Start the Dolt server — bd commands need a running server.
-			// The server stays running after install (it's lightweight infrastructure,
-			// like a database). Stop it with 'gt dolt stop' when not needed.
 			if err := doltserver.Start(absPath); err != nil {
 				if !strings.Contains(err.Error(), "already running") {
 					fmt.Printf("   %s Could not start Dolt server: %v\n", style.Dim.Render("⚠"), err)
 				}
 			}
-		} else {
+		} else if _, err := exec.LookPath("dolt"); err != nil {
 			fmt.Printf("   %s dolt not found in PATH — Dolt backend may not fully initialize\n", style.Dim.Render("⚠"))
 		}
 
@@ -559,6 +559,10 @@ func writeJSON(path string, data interface{}) error {
 // buildBdInitArgs returns the arguments for `bd init` including the correct
 // --server-port derived from the town's Dolt configuration.
 func buildBdInitArgs(townPath string) []string {
+	// In sandbox mode, bd uses embedded Dolt — no server flags needed.
+	if os.Getenv("IS_SANDBOX") != "" {
+		return []string{"init", "--prefix", "hq"}
+	}
 	cfg := doltserver.DefaultConfig(townPath)
 	return []string{"init", "--prefix", "hq", "--server",
 		"--server-port", strconv.Itoa(cfg.Port)}
@@ -566,29 +570,31 @@ func buildBdInitArgs(townPath string) []string {
 
 // initTownBeads initializes town-level beads database using bd init.
 // Town beads use the "hq-" prefix for mayor mail and cross-rig coordination.
-// Uses Dolt backend in server mode (Gas Town requires a running Dolt sql-server).
+// Uses embedded Dolt in sandbox mode; Dolt server mode otherwise.
 func initTownBeads(townPath string) error {
-	// Dolt server is required — wait for it to accept queries before proceeding.
+	// In server mode, wait for Dolt server to accept queries before proceeding.
 	// The server may have just been started by gt install and TCP reachability
 	// alone is not sufficient; we need MySQL protocol readiness.
-	cfg := doltserver.DefaultConfig(townPath)
-	dsn := fmt.Sprintf("%s@tcp(%s)/", cfg.User, cfg.HostPort())
-	var lastErr error
-	for attempt := 0; attempt < 20; attempt++ {
-		db, err := sql.Open("mysql", dsn)
-		if err == nil {
-			err = db.Ping()
-			db.Close()
+	if os.Getenv("IS_SANDBOX") == "" {
+		cfg := doltserver.DefaultConfig(townPath)
+		dsn := fmt.Sprintf("%s@tcp(%s)/", cfg.User, cfg.HostPort())
+		var lastErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			db, err := sql.Open("mysql", dsn)
+			if err == nil {
+				err = db.Ping()
+				db.Close()
+			}
+			if err == nil {
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
 		}
-		if err == nil {
-			lastErr = nil
-			break
+		if lastErr != nil {
+			return fmt.Errorf("Dolt server is not ready after 10s: %w", lastErr)
 		}
-		lastErr = err
-		time.Sleep(500 * time.Millisecond)
-	}
-	if lastErr != nil {
-		return fmt.Errorf("Dolt server is not ready after 10s: %w", lastErr)
 	}
 
 	// Run: bd init --prefix hq --server
@@ -621,8 +627,11 @@ func initTownBeads(townPath string) error {
 
 	// Ensure metadata.json has dolt_database set (EnsureMetadata fills missing
 	// values but does not overwrite existing ones).
-	if err := doltserver.EnsureMetadata(townPath, "hq"); err != nil {
-		return fmt.Errorf("ensuring hq metadata: %w", err)
+	// Skipped in sandbox/embedded mode — bd init writes its own metadata.json.
+	if os.Getenv("IS_SANDBOX") == "" {
+		if err := doltserver.EnsureMetadata(townPath, "hq"); err != nil {
+			return fmt.Errorf("ensuring hq metadata: %w", err)
+		}
 	}
 
 	// Ensure config.yaml exists with a stable prefix for clone/adopt workflows.
